@@ -21,7 +21,32 @@
     user-select: none; 
     -webkit-user-select: none; 
     transition: background-color 0.3s;
+    overflow: hidden;
   }
+  
+  /* Kapı Animasyonu CSS'leri */
+  #door-container {
+    position: absolute;
+    top: 0; left: 0; width: 100vw; height: 100vh;
+    display: none;
+    z-index: 50;
+    pointer-events: none;
+  }
+  .door-half {
+    position: absolute;
+    top: 0; width: 50vw; height: 100vh;
+    background: #111;
+    border: 4px solid #333;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: inset 0 0 50px rgba(0,0,0,0.8);
+  }
+  #door-left { left: 0; border-right: 2px solid #555; }
+  #door-right { right: 0; border-left: 2px solid #555; }
+  
+  .door-open #door-left { transform: translateX(-50vw); }
+  .door-open #door-right { transform: translateX(50vw); }
+
   #display { 
     font-size: 3rem; 
     margin-bottom: 40px; 
@@ -31,11 +56,13 @@
     text-shadow: 0 0 15px #0f0; 
     text-align: center;
     white-space: nowrap;
+    z-index: 10;
   }
   .grid { 
     display: grid; 
     grid-template-columns: repeat(3, 1fr); 
     gap: 20px; 
+    z-index: 10;
   }
   .key { 
     background: #1a1a1a; 
@@ -50,17 +77,29 @@
     box-shadow: 0 4px 10px rgba(0,0,0,0.8); 
     cursor: pointer;
   }
-  .key:active { 
-    background: #333; 
-    transform: scale(0.95); 
-  }
-  body.granted { background: #003300; }
+  .key:active { background: #333; transform: scale(0.95); }
+  
+  /* Durum Renkleri */
+  body.granted { background: #002200; }
   body.granted #display { color: #0f0; text-shadow: 0 0 20px #0f0; }
-  body.denied { background: #440000; }
+  body.denied { background: #330000; }
   body.denied #display { color: #f00; text-shadow: 0 0 20px #f00; }
+  body.alarm-bg { animation: alarmFlash 0.5s infinite; }
+  
+  @keyframes alarmFlash {
+    0% { background: #550000; }
+    50% { background: #ff0000; }
+    100% { background: #550000; }
+  }
 </style>
 </head>
 <body>
+
+<!-- Açılır Kapı Görselleri -->
+<div id="door-container">
+  <div class="door-half" id="door-left"></div>
+  <div class="door-half" id="door-right"></div>
+</div>
 
 <div id="display">------</div>
 
@@ -83,23 +122,27 @@
   const SECRET = "167010"; 
   let input = "";
   const display = document.getElementById('display');
+  const doorContainer = document.getElementById('door-container');
   
   let audioCtx;
+  let speechUnlocked = false;
 
-  // iOS için ses motorunu ilk dokunuşta zorla uyandırma fonksiyonu
+  // Ses motorunu ve Robot Sesi motorunu uyandırma (iOS için zorunlu)
   function initAudio() {
-    if (!audioCtx) {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (audioCtx.state === 'suspended') {
-      audioCtx.resume();
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    
+    if (!speechUnlocked) {
+      let silentMsg = new SpeechSynthesisUtterance('');
+      window.speechSynthesis.speak(silentMsg);
+      speechUnlocked = true;
     }
   }
 
-  // Ekrana ilk dokunuşta sesi aktif et
   document.body.addEventListener('touchstart', initAudio, { once: true });
   document.body.addEventListener('click', initAudio, { once: true });
 
+  // Frekans Sesi Üretici
   function playTone(freq, type, duration) {
     if (!audioCtx) return;
     const osc = audioCtx.createOscillator();
@@ -111,6 +154,27 @@
     osc.start();
     gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
     osc.stop(audioCtx.currentTime + duration);
+  }
+
+  // Siren/Alarm Sesi Üretici
+  function playAlarmSound() {
+    if (!audioCtx) return;
+    for (let i = 0; i < 6; i++) {
+      setTimeout(() => playTone(800, 'square', 0.2), i * 400);
+      setTimeout(() => playTone(600, 'square', 0.2), i * 400 + 200);
+    }
+  }
+
+  // Telefonun kendi sesiyle Türkçe Konuşturma (Text-to-Speech)
+  function speak(text, pitchValue, rateValue) {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Önceki konuşmayı kes
+      const msg = new SpeechSynthesisUtterance(text);
+      msg.lang = 'tr-TR';
+      msg.pitch = pitchValue; // 0.1 kalın/korkutucu, 1 normal, 2 ince
+      msg.rate = rateValue;   // Konuşma hızı
+      window.speechSynthesis.speak(msg);
+    }
   }
 
   function press(key) {
@@ -141,11 +205,8 @@
     
     let str = "";
     for(let i=0; i<6; i++) {
-      if(i < input.length) {
-        str += "*";
-      } else {
-        str += "-";
-      }
+      if(i < input.length) str += "*";
+      else str += "-";
     }
     display.innerText = str;
   }
@@ -153,26 +214,73 @@
   function checkCode() {
     initAudio();
     if (input === SECRET) {
-      display.style.fontSize = "2.2rem";
-      display.style.letterSpacing = "3px";
-      display.innerText = "DOĞRU ŞİFRE";
+      // --- DOĞRU ŞİFRE RASTGELE SENARYOLARI ---
       document.body.className = "granted";
-      playTone(1200, 'square', 0.1); 
-      setTimeout(() => playTone(1600, 'square', 0.4), 150); 
-      setTimeout(reset, 2500);
+      let successType = Math.floor(Math.random() * 3); // 0, 1 veya 2
+      
+      if (successType === 0) {
+        // Senaryo 0: Animasyonlu Kapı Açılışı ve Ses
+        display.innerText = "AÇILIYOR";
+        doorContainer.style.display = "block"; // Kapıları görünür yap
+        playTone(150, 'square', 0.5); // Kilit açılma sesi
+        setTimeout(() => {
+          document.body.classList.add('door-open'); // Kapıları yana kaydır
+          speak("Şifre doğru. Kapı açılıyor.", 0.8, 0.9);
+        }, 500);
+        setTimeout(reset, 4500); // Animasyon uzun olduğu için süre fazla
+        
+      } else if (successType === 1) {
+        // Senaryo 1: Sadece Sesli Tebrikler
+        display.innerText = "TEBRİKLER";
+        playTone(1200, 'square', 0.1); 
+        setTimeout(() => playTone(1600, 'square', 0.4), 150);
+        speak("Tebrikler. Giriş izni verildi.", 1.2, 1);
+        setTimeout(reset, 3000);
+        
+      } else {
+        // Senaryo 2: Klasik Doğrulama
+        display.innerText = "KABUL EDİLDİ";
+        playTone(1000, 'sine', 0.2);
+        setTimeout(() => playTone(1500, 'sine', 0.3), 200);
+        speak("Giriş onaylandı.", 1, 1);
+        setTimeout(reset, 3000);
+      }
+
     } else {
-      display.style.fontSize = "2.5rem";
-      display.style.letterSpacing = "5px";
-      display.innerText = "HATA";
+      // --- YANLIŞ ŞİFRE RASTGELE SENARYOLARI ---
       document.body.className = "denied";
-      playTone(150, 'sawtooth', 0.7); 
-      setTimeout(reset, 2000);
+      let failType = Math.floor(Math.random() * 3); // 0, 1 veya 2
+      
+      if (failType === 0) {
+        // Senaryo 0: Sert, Korkutucu Kalın Ses
+        display.innerText = "HATA";
+        display.style.letterSpacing = "5px";
+        playTone(100, 'sawtooth', 0.5); 
+        speak("Yanlış şifre.", 0.1, 0.8); // pitch 0.1 çok kalın ve robotik bir ses yapar
+        
+      } else if (failType === 1) {
+        // Senaryo 1: Kırmızı Flaşlı Siren Alarmı
+        display.innerText = "İHLAL";
+        document.body.classList.add('alarm-bg'); // Ekran kırmızı yanıp söner
+        playAlarmSound(); // Siren sesi çalar
+        speak("Dikkat. İzinsiz giriş denemesi.", 0.8, 1);
+        
+      } else {
+        // Senaryo 2: Katı Uyarı Sesi
+        display.innerText = "UYARI";
+        playTone(200, 'square', 0.3);
+        speak("Uyarı. Lütfen doğru şifreyi giriniz.", 0.6, 0.9);
+      }
+      setTimeout(reset, 3500);
     }
   }
 
   function reset() {
     input = "";
     document.body.className = "";
+    document.body.classList.remove('alarm-bg');
+    document.body.classList.remove('door-open');
+    setTimeout(() => { doorContainer.style.display = "none"; }, 500); // Kapıları geri sakla
     updateDisplay();
   }
   
